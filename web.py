@@ -51,6 +51,7 @@ class Driver(Chrome):
         if log_request:
             now = datetime.now().strftime("%Y%m%d%H%M%S")
             logfile_path = os.path.join(os.getcwd(), 'out', 'logs', f'request.{now}.log')
+            os.makedirs(logfile_path, exist_ok=True)
 
         # update environment
         if not executable_path:
@@ -82,6 +83,8 @@ class Driver(Chrome):
         # download options
         if not download_path:
             download_path = os.path.join(os.getcwd(), 'out', 'download')
+        os.makedirs(download_path, exist_ok=True)
+
         options.add_experimental_option('prefs', {
             'download': {
                 'default_directory': download_path,
@@ -124,26 +127,30 @@ class Driver(Chrome):
 
 
 def main():
-    driver = Driver(log_request=False, )
+    # setup driver
+    driver = Driver(log_request=False, headless=False)
+
     driver.get('https://www.saucedemo.com')
     driver.wait()
 
-    # username = (By.ID, 'user-name')
-    # driver.wait(EC.element_to_be_clickable(username))
-    # driver.find_element(*username).send_keys('standard_user')
-    #
-    # password = (By.ID, 'password')
-    # driver.wait(EC.element_to_be_clickable(password))
-    # driver.find_element(*password).send_keys('secret_sauce')
-    #
-    # submit = (By.ID, 'login-button')
-    # driver.wait(EC.element_to_be_clickable(submit))
-    # driver.find_element(*submit).click()
-    #
+    username = (By.ID, 'user-name')
+    driver.wait(EC.element_to_be_clickable(username))
+    driver.find_element(*username).send_keys('standard_user')
 
+    password = (By.ID, 'password')
+    driver.wait(EC.element_to_be_clickable(password))
+    driver.find_element(*password).send_keys('secret_sauce')
+
+    submit = (By.ID, 'login-button')
+    driver.wait(EC.element_to_be_clickable(submit))
+    driver.find_element(*submit).click()
+
+    # html parse tree
     soup = BeautifulSoup(driver.page_source, 'html.parser')
-    with open(os.path.join('out', '_.html'), 'wb') as file:
+    with open(os.path.join('out', 'out.html'), 'wb') as file:
         file.write(soup.prettify('utf-8'))
+
+    # wait indefinitely
     while True:
         __import__('time').sleep(60)
     # driver.close()

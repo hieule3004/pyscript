@@ -1,16 +1,19 @@
 import json
+import math
 import os
 import sys
 from datetime import datetime
 from functools import partial, reduce, wraps
-from typing import Callable
 
+import requests
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver import Chrome, ChromeOptions, ChromeService
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.by import By
 from bs4 import BeautifulSoup
+import pandas as pd
+from PIL import Image as PillowImage
 
 
 # === Utils === #
@@ -46,6 +49,7 @@ class Driver(Chrome):
                  download_path: str = None,
                  log_request=False,
                  headless=False,
+                 wait_timeout=60,
                  ):
         logfile_path = None
         if log_request:
@@ -106,6 +110,7 @@ class Driver(Chrome):
         super().__init__(service=ChromeService(executable_path=executable_path), options=options)
 
         self.__logfile_path = logfile_path
+        self.wait = WebDriverWait(driver=self, timeout=wait_timeout)
 
         print(f'executable_path={executable_path}')
         print(f'binary_path={binary_path}')
@@ -120,40 +125,77 @@ class Driver(Chrome):
                     logfile.write(json.dumps(json.loads(log['message']), indent=2))
         is_loaded = len(logs) == 0
         # self.implicitly_wait(2 if is_loaded else 0)
+        self.get_network_conditions()
         return is_loaded
-
-    def wait(self, wait_func: Callable = requests_sent):
-        WebDriverWait(driver=self, timeout=60).until(wait_func)
 
 
 def main():
-    # setup driver
-    driver = Driver(log_request=False, headless=False)
+    base_url = 'https://www.saucedemo.com'
+    html_path = os.path.join('out', 'out.html')
+    if os.path.exists(html_path):
+        with open(html_path, 'r') as html_file:
+            html = html_file.read()
+    else:
+        driver = Driver(log_request=False, headless=True)
 
-    driver.get('https://www.saucedemo.com')
-    driver.wait()
+        driver.get(base_url)
 
-    username = (By.ID, 'user-name')
-    driver.wait(EC.element_to_be_clickable(username))
-    driver.find_element(*username).send_keys('standard_user')
+        username = (By.ID, 'user-name')
+        driver.wait.until(EC.element_to_be_clickable(username))
+        driver.find_element(*username).send_keys('standard_user')
 
-    password = (By.ID, 'password')
-    driver.wait(EC.element_to_be_clickable(password))
-    driver.find_element(*password).send_keys('secret_sauce')
+        password = (By.ID, 'password')
+        driver.wait.until(EC.element_to_be_clickable(password))
+        driver.find_element(*password).send_keys('secret_sauce')
 
-    submit = (By.ID, 'login-button')
-    driver.wait(EC.element_to_be_clickable(submit))
-    driver.find_element(*submit).click()
+        submit = (By.ID, 'login-button')
+        driver.wait.until(EC.element_to_be_clickable(submit))
+        driver.find_element(*submit).click()
+
+        html = driver.page_source
+        driver.quit()
 
     # html parse tree
-    soup = BeautifulSoup(driver.page_source, 'html.parser')
-    with open(os.path.join('out', 'out.html'), 'wb') as file:
-        file.write(soup.prettify('utf-8'))
+    soup = BeautifulSoup(html, 'html.parser')
+    if not os.path.exists(html_path):
+        with open(html_path, 'wb') as html_file:
+            html_file.write(soup.prettify('utf-8'))
 
-    # wait indefinitely
-    while True:
-        __import__('time').sleep(60)
-    # driver.close()
+    # tabular data
+    rows = [[
+        e.find('img', {'class': 'inventory_item_img'}).attrs['src'],
+        e.find('div', {'class': 'inventory_item_name'}).text,
+        e.find('div', {'class': 'inventory_item_desc'}).text,
+        e.find('div', {'class': 'inventory_item_price'}).text,
+    ] for i, e in enumerate(soup.find_all('div', {'class': 'inventory_item'}))]
+
+    header = ['image', 'name', 'description', 'price']
+    df = pd.DataFrame(rows, columns=header)
+
+    with pd.ExcelWriter(os.path.join('out', 'out.xlsx'), engine='xlsxwriter') as writer:
+        writer.book.add_format({'text_wrap': 1, 'text_v_align': 'top'})
+        df.to_excel(writer, sheet_name='Sheet')
+        ws = writer.sheets['Sheet']
+
+        cw, ch = 128, 192
+        img_col_idx = df.columns.get_loc('image') + 1
+        for i, path in enumerate(df['image']):
+            img_path = os.path.join('out', 'download', os.path.basename(path))
+            if not os.path.exists(img_path):
+                # download image
+                with open(img_path, 'wb') as img_file:
+                    img_file.write(requests.get(f'{base_url}{path}').raw)
+            # replace url path with image
+            iw, ih = PillowImage.open(img_path).size
+            letter = chr(ord("A") + img_col_idx)
+            ws.insert_image(f'{letter}{i + 2}', img_path, {'x_scale': cw / iw, 'y_scale': ch / ih})
+            ws.write_string(i + 1, img_col_idx, '')
+
+        # resize cells
+        ws.autofit()
+        ws.set_column(img_col_idx, img_col_idx, 17.6)
+        for idx in range(len(df.index)):
+            ws.set_row(idx + 1, 0.75 * ch)
 
 
 if __name__ == '__main__':
